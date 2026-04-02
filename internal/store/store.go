@@ -22,5 +22,27 @@ func now()string{return time.Now().UTC().Format(time.RFC3339)}
 func(d *DB)Create(e *Feed)error{e.ID=genID();e.CreatedAt=now();_,err:=d.db.Exec(`INSERT INTO feeds(id,title,url,site_url,category,item_count,unread_count,last_fetched_at,status,created_at)VALUES(?,?,?,?,?,?,?,?,?,?)`,e.ID,e.Title,e.URL,e.SiteURL,e.Category,e.ItemCount,e.UnreadCount,e.LastFetchedAt,e.Status,e.CreatedAt);return err}
 func(d *DB)Get(id string)*Feed{var e Feed;if d.db.QueryRow(`SELECT id,title,url,site_url,category,item_count,unread_count,last_fetched_at,status,created_at FROM feeds WHERE id=?`,id).Scan(&e.ID,&e.Title,&e.URL,&e.SiteURL,&e.Category,&e.ItemCount,&e.UnreadCount,&e.LastFetchedAt,&e.Status,&e.CreatedAt)!=nil{return nil};return &e}
 func(d *DB)List()[]Feed{rows,_:=d.db.Query(`SELECT id,title,url,site_url,category,item_count,unread_count,last_fetched_at,status,created_at FROM feeds ORDER BY created_at DESC`);if rows==nil{return nil};defer rows.Close();var o []Feed;for rows.Next(){var e Feed;rows.Scan(&e.ID,&e.Title,&e.URL,&e.SiteURL,&e.Category,&e.ItemCount,&e.UnreadCount,&e.LastFetchedAt,&e.Status,&e.CreatedAt);o=append(o,e)};return o}
+func(d *DB)Update(e *Feed)error{_,err:=d.db.Exec(`UPDATE feeds SET title=?,url=?,site_url=?,category=?,item_count=?,unread_count=?,last_fetched_at=?,status=? WHERE id=?`,e.Title,e.URL,e.SiteURL,e.Category,e.ItemCount,e.UnreadCount,e.LastFetchedAt,e.Status,e.ID);return err}
 func(d *DB)Delete(id string)error{_,err:=d.db.Exec(`DELETE FROM feeds WHERE id=?`,id);return err}
 func(d *DB)Count()int{var n int;d.db.QueryRow(`SELECT COUNT(*) FROM feeds`).Scan(&n);return n}
+
+func(d *DB)Search(q string, filters map[string]string)[]Feed{
+    where:="1=1"
+    args:=[]any{}
+    if q!=""{
+        where+=" AND (title LIKE ?)"
+        args=append(args,"%"+q+"%");
+    }
+    if v,ok:=filters["category"];ok&&v!=""{where+=" AND category=?";args=append(args,v)}
+    if v,ok:=filters["status"];ok&&v!=""{where+=" AND status=?";args=append(args,v)}
+    rows,_:=d.db.Query(`SELECT id,title,url,site_url,category,item_count,unread_count,last_fetched_at,status,created_at FROM feeds WHERE `+where+` ORDER BY created_at DESC`,args...)
+    if rows==nil{return nil};defer rows.Close()
+    var o []Feed;for rows.Next(){var e Feed;rows.Scan(&e.ID,&e.Title,&e.URL,&e.SiteURL,&e.Category,&e.ItemCount,&e.UnreadCount,&e.LastFetchedAt,&e.Status,&e.CreatedAt);o=append(o,e)};return o
+}
+
+func(d *DB)Stats()map[string]any{
+    m:=map[string]any{"total":d.Count()}
+    rows,_:=d.db.Query(`SELECT status,COUNT(*) FROM feeds GROUP BY status`)
+    if rows!=nil{defer rows.Close();by:=map[string]int{};for rows.Next(){var s string;var c int;rows.Scan(&s,&c);by[s]=c};m["by_status"]=by}
+    return m
+}
