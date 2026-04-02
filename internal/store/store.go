@@ -1,14 +1,23 @@
 package store
-import("database/sql";"fmt";"os";"path/filepath";"time";_ "modernc.org/sqlite")
-type DB struct{*sql.DB}
-type Feed struct{ID int64 `json:"id"`;Name string `json:"name"`;URL string `json:"url"`;Type string `json:"type"`;ItemCount int `json:"item_count"`;LastFetched *string `json:"last_fetched"`;CreatedAt time.Time `json:"created_at"`}
-type FeedItem struct{ID int64 `json:"id"`;FeedID int64 `json:"feed_id"`;Title string `json:"title"`;URL string `json:"url"`;Summary string `json:"summary"`;Read bool `json:"read"`;PublishedAt string `json:"published_at"`;CreatedAt time.Time `json:"created_at"`}
-func Open(d string)(*DB,error){os.MkdirAll(d,0755);dsn:=filepath.Join(d,"feedreader.db")+"?_journal_mode=WAL&_busy_timeout=5000";db,err:=sql.Open("sqlite",dsn);if err!=nil{return nil,fmt.Errorf("open: %w",err)};db.SetMaxOpenConns(1);migrate(db);return &DB{db},nil}
-func migrate(db *sql.DB){db.Exec(`CREATE TABLE IF NOT EXISTS feeds(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,url TEXT NOT NULL UNIQUE,type TEXT DEFAULT 'rss',last_fetched TEXT,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);CREATE TABLE IF NOT EXISTS feed_items(id INTEGER PRIMARY KEY AUTOINCREMENT,feed_id INTEGER NOT NULL,title TEXT NOT NULL,url TEXT DEFAULT '',summary TEXT DEFAULT '',read INTEGER DEFAULT 0,published_at TEXT DEFAULT '',created_at DATETIME DEFAULT CURRENT_TIMESTAMP,UNIQUE(feed_id,url))`)}
-func(db *DB)CreateFeed(f *Feed)error{res,err:=db.Exec(`INSERT INTO feeds(name,url,type)VALUES(?,?,?)`,f.Name,f.URL,f.Type);if err!=nil{return err};f.ID,_=res.LastInsertId();return nil}
-func(db *DB)ListFeeds()([]Feed,error){rows,_:=db.Query(`SELECT f.id,f.name,f.url,f.type,COUNT(i.id),f.last_fetched,f.created_at FROM feeds f LEFT JOIN feed_items i ON i.feed_id=f.id GROUP BY f.id ORDER BY f.name`);defer rows.Close();var out[]Feed;for rows.Next(){var f Feed;rows.Scan(&f.ID,&f.Name,&f.URL,&f.Type,&f.ItemCount,&f.LastFetched,&f.CreatedAt);out=append(out,f)};return out,nil}
-func(db *DB)AddItem(i *FeedItem)error{res,err:=db.Exec(`INSERT OR IGNORE INTO feed_items(feed_id,title,url,summary,published_at)VALUES(?,?,?,?,?)`,i.FeedID,i.Title,i.URL,i.Summary,i.PublishedAt);if err!=nil{return err};i.ID,_=res.LastInsertId();db.Exec(`UPDATE feeds SET last_fetched=datetime('now') WHERE id=?`,i.FeedID);return nil}
-func(db *DB)ListItems(feedID int64,unreadOnly bool)([]FeedItem,error){q:=`SELECT id,feed_id,title,url,summary,read,published_at,created_at FROM feed_items WHERE feed_id=?`;if unreadOnly{q+=` AND read=0`};q+=` ORDER BY created_at DESC LIMIT 100`;rows,err:=db.Query(q,feedID);if err!=nil{return nil,err};defer rows.Close();var out[]FeedItem;for rows.Next(){var i FeedItem;var r int;rows.Scan(&i.ID,&i.FeedID,&i.Title,&i.URL,&i.Summary,&r,&i.PublishedAt,&i.CreatedAt);i.Read=r==1;out=append(out,i)};return out,nil}
-func(db *DB)MarkRead(id int64){db.Exec(`UPDATE feed_items SET read=1 WHERE id=?`,id)}
-func(db *DB)DeleteFeed(id int64){db.Exec(`DELETE FROM feed_items WHERE feed_id=?`,id);db.Exec(`DELETE FROM feeds WHERE id=?`,id)}
-func(db *DB)Stats()(map[string]interface{},error){var feeds,unread int;db.QueryRow(`SELECT COUNT(*) FROM feeds`).Scan(&feeds);db.QueryRow(`SELECT COUNT(*) FROM feed_items WHERE read=0`).Scan(&unread);return map[string]interface{}{"feeds":feeds,"unread_items":unread},nil}
+import ("database/sql";"fmt";"os";"path/filepath";"time";_ "modernc.org/sqlite")
+type DB struct{db *sql.DB}
+type Item struct{
+	ID string `json:"id"`
+	Name string `json:"name"`
+	Description string `json:"description"`
+	Status string `json:"status"`
+	Category string `json:"category"`
+	Tags string `json:"tags"`
+	CreatedAt string `json:"created_at"`
+}
+func Open(d string)(*DB,error){if err:=os.MkdirAll(d,0755);err!=nil{return nil,err};db,err:=sql.Open("sqlite",filepath.Join(d,"feedreader.db")+"?_journal_mode=WAL&_busy_timeout=5000");if err!=nil{return nil,err}
+db.Exec(`CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT DEFAULT '',status TEXT DEFAULT 'active',category TEXT DEFAULT '',tags TEXT DEFAULT '',created_at TEXT DEFAULT(datetime('now')))`)
+return &DB{db:db},nil}
+func(d *DB)Close()error{return d.db.Close()}
+func genID()string{return fmt.Sprintf("%d",time.Now().UnixNano())}
+func now()string{return time.Now().UTC().Format(time.RFC3339)}
+func(d *DB)Create(e *Item)error{e.ID=genID();e.CreatedAt=now();_,err:=d.db.Exec(`INSERT INTO items(id,name,description,status,category,tags,created_at)VALUES(?,?,?,?,?,?,?)`,e.ID,e.Name,e.Description,e.Status,e.Category,e.Tags,e.CreatedAt);return err}
+func(d *DB)Get(id string)*Item{var e Item;if d.db.QueryRow(`SELECT id,name,description,status,category,tags,created_at FROM items WHERE id=?`,id).Scan(&e.ID,&e.Name,&e.Description,&e.Status,&e.Category,&e.Tags,&e.CreatedAt)!=nil{return nil};return &e}
+func(d *DB)List()[]Item{rows,_:=d.db.Query(`SELECT id,name,description,status,category,tags,created_at FROM items ORDER BY created_at DESC`);if rows==nil{return nil};defer rows.Close();var o []Item;for rows.Next(){var e Item;rows.Scan(&e.ID,&e.Name,&e.Description,&e.Status,&e.Category,&e.Tags,&e.CreatedAt);o=append(o,e)};return o}
+func(d *DB)Delete(id string)error{_,err:=d.db.Exec(`DELETE FROM items WHERE id=?`,id);return err}
+func(d *DB)Count()int{var n int;d.db.QueryRow(`SELECT COUNT(*) FROM items`).Scan(&n);return n}
